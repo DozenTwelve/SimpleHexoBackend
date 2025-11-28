@@ -107,6 +107,16 @@ const appendImageToContent = (content, imgPath) => {
   return `${prefix}${GALLERY_START}\n${anchor}\n${GALLERY_END}\n`;
 };
 
+const appendArchiveLink = (content, linkPath, linkText) => {
+  if (!linkPath) return content;
+  if (content.includes(linkPath)) return content;
+  const label = linkText && linkText.trim() ? linkText.trim() : linkPath;
+  const markdown = `[${label}](${linkPath})`;
+  const trimmed = (content || '').trimEnd();
+  const prefix = trimmed ? `${trimmed}\n\n` : '';
+  return `${prefix}${markdown}\n`;
+};
+
 const isSafeFolder = (folder) => {
   if (!folder) return false;
   if (folder.includes('..') || folder.includes('/') || folder.includes('\\')) return false;
@@ -233,6 +243,34 @@ const handleUploadImage = async (req, res, folder) => {
   await writePostFile(folder, meta, nextContent);
 
   respond(res, 200, { path: imagePath, content: nextContent });
+};
+
+const handleUploadArchiveFile = async (req, res, folder) => {
+  const { filename, data, linkText } = await readJsonBody(req, 15 * 1024 * 1024);
+  if (!filename || !data) {
+    return respond(res, 400, { error: 'filename and data (base64) are required' });
+  }
+
+  const safeName = path.basename(filename);
+  if (safeName.includes('..') || safeName.includes('/') || safeName.includes('\\')) {
+    return respond(res, 400, { error: 'Invalid filename' });
+  }
+  if (!/\.html?$/i.test(safeName)) {
+    return respond(res, 400, { error: 'Only HTML/HTM files are supported' });
+  }
+
+  const buffer = Buffer.from(data.replace(/^data:[^,]+,/, ''), 'base64');
+  const targetDir = path.join(POSTS_DIR, folder, 'archives');
+  await ensureDir(targetDir);
+  const destPath = path.join(targetDir, safeName);
+  await fsp.writeFile(destPath, buffer);
+
+  const linkPath = `/posts/${folder}/archives/${encodeURIComponent(safeName)}`;
+  const { meta, content } = await loadPost(folder);
+  const nextContent = appendArchiveLink(content, linkPath, linkText);
+  await writePostFile(folder, meta, nextContent);
+
+  respond(res, 200, { path: linkPath, content: nextContent });
 };
 
 const handleRenameIfNeeded = async (currentFolder, meta, content, updates = {}) => {
@@ -399,6 +437,10 @@ const server = http.createServer(async (req, res) => {
 
       if (sub === 'images' && req.method === 'POST') {
         return await handleUploadImage(req, res, folder);
+      }
+
+      if (sub === 'archives' && req.method === 'POST') {
+        return await handleUploadArchiveFile(req, res, folder);
       }
 
       if (req.method === 'GET') {
